@@ -128,8 +128,12 @@ class AccessHelper:
 
     def close(self):
         if self.conn:
-            self.conn.close()
-            self.conn = None
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            finally:
+                self.conn = None
 
     def get_tables(self):
         return [row.table_name for row in self.conn.cursor().tables(tableType='TABLE')
@@ -423,26 +427,22 @@ class MigrationWorker(QThread):
         col_names_set = set(col_names)
         col_indices = []
         self.progress.emit(tbl, imported, total_rows)
+        cur = None  # <--- 增加这一行，初始化游标变量
         try:
-            # 修复核心逻辑：决定实际要插入 SQL Server 的列名
-            # 如果不保留自增ID，必须从列列表中剔除自增列，让 SQL Server 自动生成
-            insert_col_names = [c for c in col_names if not (not use_id_insert and c in id_cols)]
-            
             src_cols, rows, cur = ah.fetch_batch(tbl, pk_col, last_pk, batch_size)
-            # 只取需要插入的列对应的索引
+            insert_col_names = [c for c in col_names if not (not use_id_insert and c in id_cols)]
             col_indices = [src_cols.index(c) for c in insert_col_names if c in src_cols]
             actual_cols = [insert_col_names[i] for i in range(len(insert_col_names)) if insert_col_names[i] in src_cols]
 
             while rows:
                 if self._stop:
                     self.bp_mgr.save(self.task_id, tbl, last_pk, pk_col, imported, total_rows, 'paused')
-                    return False, '已暂停，断点已保存'
+                    break  # <--- 之前这里直接跳出，导致下面的 cur.close() 不执行
                 filtered = [self._clean_row(tuple(row[ci] for ci in col_indices)) for row in rows]
                 ok_cnt, fail_rows = sh.insert_batch(sql_tbl, actual_cols, filtered, use_id_insert)
                 if fail_rows:
                     err_msg = fail_rows[0].get('error', '未知错误')
-                    self.log.emit('ERROR',
-                                  f'表 {tbl} 本批 {len(filtered)} 行中有 {len(fail_rows)} 行失败！')
+                    self.log.emit('ERROR', f'表 {tbl} 本批 {len(filtered)} 行中有 {len(fail_rows)} 行失败！')
                     self.log.emit('ERROR', f'首条失败原因: {err_msg}')
                 imported += ok_cnt
                 if pk_col in src_cols:
@@ -452,10 +452,18 @@ class MigrationWorker(QThread):
                 if imported % (batch_size * 5) == 0:
                     self.bp_mgr.save(self.task_id, tbl, last_pk, pk_col, imported, total_rows, 'in_progress')
                 rows = cur.fetchmany(batch_size)
-            cur.close()
+                
         except Exception as e:
             self.bp_mgr.save(self.task_id, tbl, last_pk, pk_col, imported, total_rows, 'error')
             return False, str(e)
+        
+        # <--- 增加这个 finally 块，确保游标 100% 被释放！
+        finally:
+            if cur:
+                try:
+                    cur.close()
+                except Exception:
+                    pass
 
         self.bp_mgr.save(self.task_id, tbl, last_pk, pk_col, imported, total_rows, 'completed')
         return True, f'成功导入 {imported} 行'
@@ -661,7 +669,7 @@ class MainWindow(QMainWindow):
         hl = QHBoxLayout()
         self.rb_win = QRadioButton('Windows 身份验证')
         self.rb_sql = QRadioButton('SQL Server 身份验证')
-        self.rb_win.setChecked(True)
+        self.rb_sql.setChecked(True)
         self.rb_sql.toggled.connect(self._toggle_sql_auth)
         hl.addWidget(self.rb_win)
         hl.addWidget(self.rb_sql)
@@ -909,8 +917,7 @@ class MainWindow(QMainWindow):
         # 增加详细的校验日志，解决"点了没反应"的盲区问题
         if not drv:
             self._log('ERROR', '连接失败：未选择 Access ODBC 驱动！')
-            QMessageBox.warning(self, '连接错误', 
-                '未选择 Access ODBC 驱动！\n如果下拉框为空，请安装 Microsoft Access Database Engine。')
+            QMessageBox.warning(self, '连接错误', '未选择 Access ODBC 驱动！\n如果下拉框为空，请安装 Microsoft Access Database Engine。')
             return
             
         if not path:
@@ -945,8 +952,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             err_msg = str(e)
             self._log('ERROR', f'连接异常: {err_msg}')
-            QMessageBox.critical(self, '连接失败', 
-                f'{err_msg}\n\n常见原因：\n1. Python 位数与 Access 驱动位数不一致\n2. 文件被其他程序独占打开\n3. 驱动版本不支持该文件格式')
+            QMessageBox.critical(self, '连接失败', f'{err_msg}\n\n常见原因：\n1. Python 位数与 Access 驱动位数不一致\n2. 文件被其他程序独占打开\n3. 驱动版本不支持该文件格式')
 
     def _toggle_sql_auth(self, checked):
         self.ed_user.setEnabled(checked)
@@ -1055,8 +1061,7 @@ class MainWindow(QMainWindow):
     def _del_bp(self):
         if not self.task_id:
             return
-        if QMessageBox.question(self, '确认', '确定删除断点？删除后将从头开始导入。',
-                               QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+        if QMessageBox.question(self, '确认', '确定删除断点？删除后将从头开始导入。',QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
             self.bp_mgr.delete(self.task_id)
             self._refresh_bp()
             self._log('INFO', '断点已删除')
@@ -1184,14 +1189,20 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         if self.worker and self.worker.isRunning():
-            r = QMessageBox.question(self, '确认退出',
-                                     '迁移正在进行，退出后断点会保存，下次可继续。是否退出？',
-                                     QMessageBox.Yes | QMessageBox.No)
+            r = QMessageBox.question(self, '确认退出','迁移正在进行中！\n点击【是】将尝试安全中止并释放数据库连接（请稍候）...\n点击【否】取消退出。',QMessageBox.Yes | QMessageBox.No)
             if r == QMessageBox.No:
                 event.ignore()
                 return
+            
+            self._log('WARNING', '正在安全停止迁移并释放连接，请稍候...')
             self.worker.stop()
-            self.worker.wait(5000)
+            
+            # 给足 10 秒时间让线程安全退出并关闭 pyodbc 连接
+            if not self.worker.wait(10000):
+                QMessageBox.warning(self, '无法退出','迁移线程未能及时停止，为防止数据库文件死锁，请勿强制关闭！\n请等待进度条停止后再试。')
+                event.ignore()
+                return
+                
         if self.access_helper:
             self.access_helper.close()
         if self.sql_helper:
