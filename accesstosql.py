@@ -661,7 +661,7 @@ class MainWindow(QMainWindow):
         hl = QHBoxLayout()
         self.rb_win = QRadioButton('Windows 身份验证')
         self.rb_sql = QRadioButton('SQL Server 身份验证')
-        self.rb_sql.setChecked(True)
+        self.rb_win.setChecked(True)
         self.rb_sql.toggled.connect(self._toggle_sql_auth)
         hl.addWidget(self.rb_win)
         hl.addWidget(self.rb_sql)
