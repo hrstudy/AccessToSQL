@@ -47,7 +47,7 @@
 3. 点击“连接并加载表列表”，成功后下方会显示该数据库中的所有用户表。
 
 ### ② 目标配置
-1. 选择 SQL Server 的 ODBC 驱动（如 `ODBC Driver 17 for SQL Server`）。*(注：下拉框支持手动输入)*
+1. 选择 SQL Server 的 ODBC 驱动（如 `ODBC Driver 17 for SQL Server`）。
 2. 填写 SQL Server 的服务器地址、数据库名称。
 3. 选择身份验证方式（Windows 身份验证 或 SQL Server 账号密码）。
 4. 点击“测试连接”，确保配置正确。
