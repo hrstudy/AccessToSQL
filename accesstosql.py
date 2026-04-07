@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-设计：xmge
+程序设计：xmge
 辅助AI：GLM-5-Turbo
 支持网站：https://www.xmge.site 
 Access → SQL Server 数据迁移工具
@@ -676,11 +676,11 @@ class MainWindow(QMainWindow):
         fl.addRow('验证方式:', hl)
 
         self.ed_user = QLineEdit()
-        self.ed_user.setEnabled(False)
+        self.ed_user.setEnabled(True)
         fl.addRow('用户名:', self.ed_user)
         self.ed_pwd = QLineEdit()
         self.ed_pwd.setEchoMode(QLineEdit.Password)
-        self.ed_pwd.setEnabled(False)
+        self.ed_pwd.setEnabled(True)
         fl.addRow('密码:', self.ed_pwd)
         lay.addWidget(g)
 
