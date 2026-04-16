@@ -3,7 +3,7 @@
 """
 程序设计：xmge
 辅助AI：GLM-5-Turbo
-支持网站：https://www.xmge.site 
+支持网站：https://www.xmge.host 
 Access → SQL Server 数据迁移工具
 功能：字段类型映射、ID自增处理、断点续传、实时进度与日志
 依赖安装：pip install pyodbc PyQt5
@@ -329,10 +329,15 @@ class MigrationWorker(QThread):
             # 2. 处理 bytes 中的 \x00
             if isinstance(val, bytes) and b'\x00' in val:
                 cleaned[i] = val.replace(b'\x00', b'')
-            # 3. 处理 Access 的"幽灵空日期"（Access 中空日期底层往往会变成 1899-12-30）
+            # 3. 处理 Access 的"幽灵空日期"（Access 中空日期底层往往会变成 1899-12-30 00:00:00）
+            # 关键修复：短时间格式的值如 14:30 也会是 1899-12-30 14:30:00，不能误杀！
+            # 只有日期和时间全部为0（基准日期的零时刻）才是真正的空值
             try:
                 import datetime as dt
-                if isinstance(val, dt.datetime) and val.year == 1899 and val.month == 12 and val.day == 30:
+                if (isinstance(val, dt.datetime)
+                    and val.year == 1899 and val.month == 12 and val.day == 30
+                    and val.hour == 0 and val.minute == 0 and val.second == 0
+                    and val.microsecond == 0):
                     cleaned[i] = None
             except Exception:
                 pass
@@ -434,11 +439,29 @@ class MigrationWorker(QThread):
             col_indices = [src_cols.index(c) for c in insert_col_names if c in src_cols]
             actual_cols = [insert_col_names[i] for i in range(len(insert_col_names)) if insert_col_names[i] in src_cols]
 
+            # 构建目标字段类型映射，用于数据类型转换
+            sql_type_map = {c['name']: c['sql_type'] for c in col_cfgs}
+
             while rows:
                 if self._stop:
                     self.bp_mgr.save(self.task_id, tbl, last_pk, pk_col, imported, total_rows, 'paused')
                     break  # <--- 之前这里直接跳出，导致下面的 cur.close() 不执行
                 filtered = [self._clean_row(tuple(row[ci] for ci in col_indices)) for row in rows]
+
+                # 关键修复：根据目标 SQL 类型进行数据类型转换
+                # 当目标列是 TIME 类型，且值是 datetime 对象时，提取 time 部分
+                import datetime as dt_conv
+                converted = []
+                for row in filtered:
+                    new_row = list(row)
+                    for j, col_name in enumerate(actual_cols):
+                        target_type = sql_type_map.get(col_name, '').upper()
+                        val = new_row[j]
+                        if target_type == 'TIME' and isinstance(val, dt_conv.datetime):
+                            new_row[j] = val.time()
+                    converted.append(tuple(new_row))
+                filtered = converted
+
                 ok_cnt, fail_rows = sh.insert_batch(sql_tbl, actual_cols, filtered, use_id_insert)
                 if fail_rows:
                     err_msg = fail_rows[0].get('error', '未知错误')
@@ -841,7 +864,7 @@ class MainWindow(QMainWindow):
         info_label = QLabel(
             "<b>程序作者：</b>xmge<br><br>"
             "<b>AI 协助开发：</b>GLM-5-Turbo<br><br>"
-            "<b>支持网站：</b><a href='https://www.xmge.site' style='color: #2980b9; text-decoration: none;'>https://www.xmge.site</a>"
+            "<b>支持网站：</b><a href='https://www.xmge.host' style='color: #2980b9; text-decoration: none;'>https://www.xmge.host</a>"
         )
         info_label.setAlignment(Qt.AlignCenter)
         # 关键设置：允许点击链接直接调用系统默认浏览器打开
